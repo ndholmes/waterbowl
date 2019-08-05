@@ -33,7 +33,7 @@ class ws_status:
     output += "   \"barometricPressure\": \"%.1f\", \n" % (wbstatus.airPressure)
     output += "   \"state\": \"%s\", \n" % (['IDLE','FILTERING','SETTLING','REFILLING','WAITING'][wbstatus.state])
     output += "   \"update\": \"%s\" \n" % (wbstatus.lastUpdate)
-    output += '}';
+    output += '} }';
     return output
 
 def delayWithStatus(hw, wbstatus, statusString, delayTimeSeconds, interval):

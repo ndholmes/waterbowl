@@ -103,7 +103,7 @@ def main():
         delayWithStatus(hw, wbstatus, "\033[32mWAITING\033[0m", 60 * 240, 10)
         hw.setCirculatorPump(False)
         hw.setSterilizer(False)
-        wbstatus.state = WaterbowlState.WAITING
+        wbstatus.state = WaterbowlState.REFILLING
       else:
         wbstatus.state = WaterbowlState.IDLE
         

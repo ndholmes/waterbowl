@@ -42,7 +42,7 @@ class WaterbowlHardware:
     GPIO.setup(self.CIRCULATOR_PUMP, GPIO.OUT, initial=GPIO.LOW)
     GPIO.setup(self.UV_STERILIZER, GPIO.OUT, initial=GPIO.LOW)
     GPIO.setup(self.INLET_VALVE, GPIO.OUT, initial=GPIO.LOW)
-    print GPIO.RPI_INFO
+    print(GPIO.RPI_INFO)
 
   def sensorInit(self):
     self.tof.open() # Initialise the i2c bus and configure the sensor

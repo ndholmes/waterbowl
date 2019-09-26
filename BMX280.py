@@ -168,4 +168,4 @@ class BMX280:
 
 if __name__== "__main__":
   bme280 = BMX280()
-  print bme280.convert()
+  print(bme280.convert())

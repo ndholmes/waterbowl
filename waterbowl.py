@@ -1,10 +1,12 @@
 # System imports
 import sys
 import time
-import thread
+import thread as thread
 import datetime
-
+import paho.mqtt.client as mqtt
 import WaterbowlHardware
+import pytz
+import json
 
 # Web service imports 
 import web
@@ -38,10 +40,10 @@ class ws_status:
 
 def delayWithStatus(hw, wbstatus, statusString, delayTimeSeconds, interval):
   timestamp = time.strftime("%d-%b-%Y %H:%M:%S")
-  print "%s [%s] Delaying %d seconds, reporting every %d seconds" % (timestamp, statusString, delayTimeSeconds, interval)
+  print("%s [%s] Delaying %d seconds, reporting every %d seconds" % (timestamp, statusString, delayTimeSeconds, interval))
   while delayTimeSeconds >= 0:
     timestamp = time.strftime("%d-%b-%Y %H:%M:%S")
-    print "%s [%s] %ds remaining, Food: %d%% Tank: %d%% Temp: %.1fF" % (timestamp, statusString, delayTimeSeconds, wbstatus.foodLevel, wbstatus.tankLevel, wbstatus.airTempF)
+    print("%s [%s] %ds remaining, Food: %d%% Tank: %d%% Temp: %.1fF" % (timestamp, statusString, delayTimeSeconds, wbstatus.foodLevel, wbstatus.tankLevel, wbstatus.airTempF))
     i = interval
     while i > 0:
       i -= 1
@@ -62,7 +64,7 @@ def delayWithStatus(hw, wbstatus, statusString, delayTimeSeconds, interval):
     delayTimeSeconds -= interval
     
 
-print "wbstatus = %d" % (id(WaterbowlHardware.wbstatus))
+print("wbstatus = %d" % (id(WaterbowlHardware.wbstatus)))
 
 def mqtt_onConnect(client, userdata, flags, rc):
    if rc == 0:
@@ -109,19 +111,51 @@ def mqttSendSensor(mqttClient, gConf, sensor, value, units):
        'type':'update',
        'value':value,
        'units': units,
-       'time':datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat(),
+       'time':datetime.datetime.utcnow().replace(tzinfo=pytz.utc).isoformat(),
        'source':gConf.configOpts['sourceName']
     }
-    mqttClient.publish(topic=topic, payload=updateMessage)
+    message = json.dumps(updateMessage, sort_keys=True)
+    mqttClient.publish(topic=topic, payload=message)
     return True
-  except:
+  except Exception as e:
+    print(e)
     return False
 
+def mqttUpdateThread(mqttClient, gConf, wbstatus):
+  lastMQTTConnectAttempt = 0
+  lastUpdateTime = 0
+
+  while True:
+      if mqttClient.connected_flag is False and (lastMQTTConnectAttempt is None or lastMQTTConnectAttempt + gConf.configOpts['mqttReconnectInterval'] < time.time()):
+        # We don't have an MQTT client and need to try reconnecting
+        try:
+          lastMQTTConnectAttempt = time.time()
+          mqttClient.loop_start()
+          mqttClient.connect(gConf.configOpts['mqttBroker'], gConf.configOpts['mqttPort'], keepalive=60)
+          while not mqttClient.connected_flag: 
+            time.sleep(2) # Wait for callback to fire
+        except(KeyboardInterrupt):
+          raise
+        except:
+          mqttClient.connected_flag = False
+
+      if mqttClient.connected_flag is True and gConf.configOpts['mqttUpdateInterval'] > 0 and lastUpdateTime + gConf.configOpts['mqttUpdateInterval'] < time.time():
+        print("Sending mqtt sensor update, next in %d seconds" % (gConf.configOpts['mqttUpdateInterval']))
+        lastUpdateTime = time.time()        
+        mqttSendSensor(mqttClient, gConf, "reservoirLevel", "%d" % (wbstatus.tankLevel), "percent")
+        mqttSendSensor(mqttClient, gConf, "waterBowlLevel", "%d" % (wbstatus.bowlLevel), "percent")
+        mqttSendSensor(mqttClient, gConf, "foodBowlLevel", "%d" % (wbstatus.foodLevel), "percent")
+        mqttSendSensor(mqttClient, gConf, "temperature", "%.1f" % ((wbstatus.airTempF-32.0) * 5 / 9), "C")
+        mqttSendSensor(mqttClient, gConf, "humidity", "%d" % (wbstatus.airHumidity), "percent")
+        mqttSendSensor(mqttClient, gConf, "barometricPressure", "%.1f" % (wbstatus.airPressure), "hPa")
+        mqttSendSensor(mqttClient, gConf, "state", ['IDLE','FILTERING','SETTLING','REFILLING','WAITING'][wbstatus.state], "string")
+
+      time.sleep(1)
 
 
 def main():
   wbstatus = WaterbowlHardware.wbstatus
-  gConf = GlobalConfiguration
+  gConf = GlobalConfiguration()
   app = web.application(urls, globals())
   thread.start_new_thread(app.run, ())
   hw = WaterbowlHardware.WaterbowlHardware()
@@ -143,26 +177,14 @@ def main():
   if gConf.configOpts['mqttUsername'] is not None and gConf.configOpts['mqttPassword'] is not None:
     mqttClient.username_pw_set(username=gConf.configOpts['mqttUsername'], password=gConf.configOpts['mqttPassword'])
 
-  lastMQTTConnectAttempt = None
-  lastUpdateTime = time.time() - gConf.configOpts['mqttUpdateInterval']
+  thread.start_new_thread(mqttUpdateThread, (mqttClient, gConf, wbstatus))
+
   
-  print "wbstatus = %d" % (id(wbstatus))
+  print("wbstatus = %d" % (id(wbstatus)))
 
   while True:
     try:
-      if mqttClient.connected_flag is False and (lastMQTTConnectAttempt is None or lastMQTTConnectAttempt + gConf.configOpts['mqttReconnectInterval'] < time.time()):
-        # We don't have an MQTT client and need to try reconnecting
-        try:
-          lastMQTTConnectAttempt = time.time()
-          mqttClient.loop_start()
-          mqttClient.connect(gConf.configOpts['mqttBroker'], gConf.configOpts['mqttPort'], keepalive=60)
-          while not mqttClient.connected_flag: 
-            time.sleep(2) # Wait for callback to fire
-          mqttClient.loop_stop()
-        except(KeyboardInterrupt):
-          raise
-        except:
-          mqttClient.connected_flag = False
+
 
       # Basic algorithm
       # Circulate for 10 minutes
@@ -194,24 +216,19 @@ def main():
       else:
         wbstatus.state = WaterbowlState.IDLE
 
-      if mqttClient.connected_flag is True and gConf.configOpts['mqttUpdateInterval'] > 0 and lastUpdateTime + gConf.configOpts['mqttUpdateInterval'] < time.time():
-        mqttSendSensor(mqttClient, "reservoirLevel", wbstatus.tankLevel, "percent")
-        mqttSendSensor(mqttClient, "waterBowlLevel", wbstatus.bowlLevel, "percent")
-        mqttSendSensor(mqttClient, "foodBowlLevel", wbstatus.foodLevel, "percent")
-        mqttSendSensor(mqttClient, "temperature", (wbstatus.airTempF-32.0) * 5 / 9, "C")
-        mqttSendSensor(mqttClient, "humidity", wbstatus.airHumidity, "percent")
-        mqttSendSensor(mqttClient, "barometricPressure", wbstatus.airPressure, "hPa")
-        mqttSendSensor(mqttClient, "state", ['IDLE','FILTERING','SETTLING','REFILLING','WAITING'][wbstatus.state], "string")
-        
+
   #    delayWithStatus("\033[33mSETTLING\033[0m", 60 * 1, 10)
     except KeyboardInterrupt:
+
       hw.close()
       app.stop()
-      print "Exiting cleanly"
+
+      print("Exiting cleanly")
       raise
 
     except:
-      print "Unexpected exception"
+      print("Unexpected exception")
+      mqttClient.loop_stop()
       hw.close()
       app.stop()
       raise
